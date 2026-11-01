@@ -15,7 +15,7 @@ import LandingPage from './pages/LandingPage';
 import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
 import { useApi } from './hooks/useApi';
-import { fetchFaculty } from './services/api';
+import { fetchFaculty, getAuthToken, setAuthToken } from './services/api';
 import { getStoredUser, logout, type AuthUser, type UserRoleType } from './services/auth';
 import type {
   PageId,
@@ -193,6 +193,14 @@ function App() {
   );
   const [adminFacultyScheduleId, setAdminFacultyScheduleId] = useState<string | null>(null);
 
+  // Synchronize demo auth token for Dev Preview when not logged in with custom credentials
+  useEffect(() => {
+    if (!getAuthToken() || !currentUser || currentUser.user_id.startsWith('demo-')) {
+      const backendRole = currentRole === 'coordinator' ? 'department_coordinator' : currentRole;
+      setAuthToken('demo-token-' + backendRole);
+    }
+  }, [currentRole, currentUser]);
+
   // Synchronize browser popstate events (back / forward buttons)
   useEffect(() => {
     const handlePopState = () => {
@@ -253,9 +261,13 @@ function App() {
 
   const handleRoleChange = useCallback((newRole: UserRole) => {
     setCurrentRole(newRole);
+    if (!currentUser || currentUser.user_id.startsWith('demo-')) {
+      const backendRole = newRole === 'coordinator' ? 'department_coordinator' : newRole;
+      setAuthToken('demo-token-' + backendRole);
+    }
     const target = getRoleDefaultPage(newRole);
-    navigateTo(`/${target}`);
-  }, [navigateTo]);
+    navigateTo('/' + target);
+  }, [currentUser, navigateTo]);
 
   const handleLoginSuccess = useCallback((user: AuthUser) => {
     setCurrentUser(user);
