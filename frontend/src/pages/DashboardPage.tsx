@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   DoorOpen,
   Users,
@@ -26,7 +26,9 @@ import {
   generateSchedule,
   processBookings,
   approveRescheduleProposal,
+  fetchRescheduleProposals,
 } from '../services/api';
+import type { RescheduleProposal } from '../types';
 import type { DashboardStats, DatasetSummaryResponse, BookingRequest } from '../types';
 
 interface DashboardPageProps {
@@ -70,6 +72,22 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
   // Administrative Solver Action States (Dev1 Priority 5)
   const [regeneratingSchedule, setRegeneratingSchedule] = useState(false);
   const [processingBookingsBatch, setProcessingBookingsBatch] = useState(false);
+  const [liveProposals, setLiveProposals] = useState<RescheduleProposal[]>([]);
+
+  const loadProposals = useCallback(async () => {
+    try {
+      const data = await fetchRescheduleProposals();
+      if (Array.isArray(data) && data.length > 0) {
+        setLiveProposals(data);
+      }
+    } catch {
+      // Ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProposals();
+  }, [loadProposals]);
 
   const sampleProposal = {
     proposalId: 'PROP-DISRUPT-101',
@@ -110,24 +128,52 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
     ],
   };
 
+  const activeProposal = useMemo(() => {
+    if (liveProposals.length > 0) {
+      const p = liveProposals[0];
+      return {
+        proposalId: p.proposal_id,
+        requester: 'Faculty Member (Gemini AI / CP-SAT Request)',
+        submittedAt: 'Just now',
+        status: p.approved || proposalApproved ? 'approved' : 'pending_admin_approval',
+        solverStatus: p.solver_status || 'OPTIMAL',
+        movedCount: p.moved_count ?? 0,
+        frozenCount: p.frozen_count ?? 0,
+        solveTimeSeconds: p.solve_time_seconds ?? 0,
+        explanation: `CP-SAT disruption solver evaluated perturbation with minimal moves. ${p.frozen_count ?? 0} sessions frozen, ${p.moved_count ?? 0} moved, ${p.added_count ?? 0} added.`,
+        changes: (p.changes || []).map((ch) => ({
+          sessionId: ch.session_id,
+          courseTitle: ch.session_id,
+          original: ch.before ? { day: ch.before.day, period: ch.before.period, room: ch.before.room_id } : null,
+          proposed: ch.after ? { day: ch.after.day, period: ch.after.period, room: ch.after.room_id } : { day: 'N/A', period: 0, room: 'N/A' },
+          action: ch.kind,
+          reason: ch.reason || 'CP-SAT schedule perturbation',
+        })),
+      };
+    }
+    return sampleProposal;
+  }, [liveProposals, proposalApproved]);
+
   const handleApproveProposal = async () => {
     setApprovingProposal(true);
+    const targetId = activeProposal.proposalId;
     try {
-      await approveRescheduleProposal(sampleProposal.proposalId);
+      await approveRescheduleProposal(targetId);
       setProposalApproved(true);
       setShowApprovalModal(false);
       setAdminNotice({
         type: 'success',
-        message: `Proposal ${sampleProposal.proposalId} approved successfully by Administrator. Timetable changes committed to active schedule.`,
+        message: `Proposal ${targetId} approved successfully by Administrator. Timetable changes committed to active schedule.`,
       });
+      await loadProposals();
     } catch (err: unknown) {
-      // In offline/demo mode, approve in UI state
       setProposalApproved(true);
       setShowApprovalModal(false);
       setAdminNotice({
         type: 'success',
-        message: `Proposal ${sampleProposal.proposalId} approved. (${err instanceof Error ? err.message : 'Applied locally to active schedule'})`,
+        message: `Proposal ${targetId} approved. (${err instanceof Error ? err.message : 'Applied locally to active schedule'})`,
       });
+      await loadProposals();
     } finally {
       setApprovingProposal(false);
     }
@@ -284,7 +330,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                 <span>Rescheduling Approval Queue</span>
               </span>
               <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-lg bg-[#FAF6ED] border border-[#E8E1D5] text-[#1E1E1E]">
-                {sampleProposal.proposalId}
+                {activeProposal.proposalId}
               </span>
               <span
                 className={`rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase ${
@@ -297,10 +343,10 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
               </span>
             </div>
             <h3 className="text-base sm:text-lg font-black text-[#1E1E1E] mt-1.5">
-              Faculty Schedule Change Proposal ({sampleProposal.requester})
+              Faculty Schedule Change Proposal ({activeProposal.requester})
             </h3>
             <p className="text-xs text-[#75716B] font-medium mt-0.5">
-              {sampleProposal.explanation}
+              {activeProposal.explanation}
             </p>
           </div>
 
@@ -328,7 +374,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
           <div className="flex items-center justify-between text-xs font-extrabold text-[#75716B] uppercase tracking-wider">
             <span>Changed Sessions Diff (Before vs. After)</span>
             <span className="text-[11px] font-semibold lowercase">
-              {sampleProposal.movedCount} sessions moved • {sampleProposal.frozenCount} sessions frozen • {sampleProposal.solveTimeSeconds}s solve time
+              {activeProposal.movedCount} sessions moved • {activeProposal.frozenCount} sessions frozen • {activeProposal.solveTimeSeconds}s solve time
             </span>
           </div>
 
@@ -344,7 +390,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#EFE8DA]">
-                {sampleProposal.changes.map((ch, idx) => (
+                {activeProposal.changes.map((ch, idx) => (
                   <tr key={idx} className="hover:bg-[#FAF6ED]/50 transition-colors">
                     <td className="px-4 py-3">
                       <div className="font-mono font-bold text-[#1E1E1E]">{ch.sessionId}</div>
@@ -526,7 +572,7 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
                   <span>Admin Approval Confirmation</span>
                 </span>
                 <h3 className="text-lg font-extrabold text-[#1E1E1E] mt-1.5 leading-snug">
-                  Approve Proposal {sampleProposal.proposalId}
+                  Approve Proposal {activeProposal.proposalId}
                 </h3>
               </div>
               <button
@@ -551,15 +597,15 @@ export default function DashboardPage({ onNavigate }: DashboardPageProps) {
             <div className="rounded-2xl border border-[#E8E1D5] bg-[#FAF6ED]/50 p-4 text-xs space-y-2">
               <div className="flex items-center justify-between font-bold text-[#1E1E1E]">
                 <span>Sessions to Move:</span>
-                <span>{sampleProposal.movedCount} sessions</span>
+                <span>{activeProposal.movedCount} sessions</span>
               </div>
               <div className="flex items-center justify-between text-[#75716B]">
                 <span>Curriculum Freeze Scope:</span>
-                <span>{sampleProposal.frozenCount} sessions intact</span>
+                <span>{activeProposal.frozenCount} sessions intact</span>
               </div>
               <div className="flex items-center justify-between text-[#75716B]">
                 <span>Requester:</span>
-                <span className="font-semibold text-[#1E1E1E]">{sampleProposal.requester}</span>
+                <span className="font-semibold text-[#1E1E1E]">{activeProposal.requester}</span>
               </div>
             </div>
 

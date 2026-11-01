@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_verified_user
 from app.core.database import get_db
-from app.core.permissions import require_admin, require_admin_or_coord
+from app.core.permissions import require_admin, require_admin_or_coord, require_role
 from app.core.persistence import (
     approve_reschedule_proposal_in_db,
     get_reschedule_proposal_from_db,
@@ -24,7 +24,10 @@ from app.rescheduling.engine import (
     approve_proposal,
     generate_proposal,
     get_proposal,
+    list_proposals,
 )
+
+require_faculty_or_above = require_role("admin", "department_coordinator", "faculty")
 from app.rescheduling.models import DisruptionInput
 
 logger = logging.getLogger(__name__)
@@ -36,7 +39,7 @@ router = APIRouter(prefix="/api/reschedule", tags=["rescheduling"])
 def propose_reschedule(
     disruption: DisruptionInput,
     time_limit_seconds: int = 60,
-    user: dict = Depends(require_admin_or_coord),
+    user: dict = Depends(require_faculty_or_above),
     db: Session | None = Depends(get_db),
 ):
     """Generate a rescheduling proposal for the given disruptions.
@@ -95,6 +98,22 @@ def get_proposal_by_id(
     return {
         k: v for k, v in proposal.items() if not k.startswith("_")
     }
+
+
+@router.get("/proposals")
+def get_all_proposals(
+    user: dict = Depends(get_verified_user),
+    db: Session | None = Depends(get_db),
+):
+    """Retrieve all generated proposals (checks memory and DB).
+
+    Requires: any authenticated user.
+    """
+    proposals = list_proposals()
+    return [
+        {k: v for k, v in p.items() if not k.startswith("_")}
+        for p in proposals
+    ]
 
 
 @router.post("/approve")

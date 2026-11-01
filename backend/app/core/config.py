@@ -62,6 +62,11 @@ class Settings:
         default_factory=lambda: _env("GEMINI_MODEL", "gemini-2.5-flash")
     )
 
+    # ── Demo mode (hackathon judging) ───────────────────
+    demo_mode: bool = field(
+        default_factory=lambda: _env("DEMO_MODE", "false").lower() in ("true", "1", "yes")
+    )
+
     def __post_init__(self) -> None:
         """Validate settings at construction time (fail-fast)."""
         if self.jwt_algorithm and self.jwt_algorithm not in _ALLOWED_JWT_ALGORITHMS:

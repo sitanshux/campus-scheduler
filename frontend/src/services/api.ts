@@ -675,6 +675,11 @@ export function approveRescheduleProposal(proposalId: string): Promise<ApprovePr
   );
 }
 
+/** GET /api/reschedule/proposals — retrieve all proposals (in-memory + DB) */
+export function fetchRescheduleProposals(): Promise<RescheduleProposal[]> {
+  return request<RescheduleProposal[]>('/api/reschedule/proposals');
+}
+
 // ──────────────────────────────────────────────
 // Venue Bookings & Submissions
 // ──────────────────────────────────────────────

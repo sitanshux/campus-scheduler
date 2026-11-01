@@ -838,7 +838,7 @@ def persist_reschedule_proposal(
                     CAST(:conflicts AS jsonb),
                     :solve_time_seconds,
                     CAST(:approved_schedule AS jsonb),
-                    :proposed_by::uuid
+                    CAST(:proposed_by AS uuid)
                 )
                 """
             ),
@@ -869,7 +869,7 @@ def persist_reschedule_proposal(
                 text(
                     """
                     SELECT public.admin_insert_reschedule_change(
-                        :proposal_id::uuid,
+                        CAST(:proposal_id AS uuid),
                         :session_id,
                         :kind,
                         :before_day,
@@ -1007,7 +1007,7 @@ def approve_reschedule_proposal_in_db(
         row = db.execute(
             text(
                 """
-                SELECT public.admin_approve_proposal(:pid, :approver_id::uuid)
+                SELECT public.admin_approve_proposal(:pid, CAST(:approver_id AS uuid))
                 """
             ),
             {"pid": proposal_id, "approver_id": approver_id},

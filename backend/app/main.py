@@ -8,6 +8,7 @@ for RS256/ES256 mode).  All routes are included via routers.
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.auth import get_verified_user, init_jwks
 from app.core.dataset import load_dataset, get_dataset_summary
@@ -32,6 +33,21 @@ app = FastAPI(
     description="Campus Scheduling and Venue Management System",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# ── CORS ────────────────────────────────────────────────
+# Allow the local Vite dev server (and 127.0.0.1 variant).
+# Credentials (Authorization header / cookies) require explicit origins —
+# wildcard "*" is NOT used.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(schedule_router)

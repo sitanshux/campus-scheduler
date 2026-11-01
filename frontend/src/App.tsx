@@ -143,7 +143,7 @@ const pageTitles: Record<PageId, { title: string; subtitle: string }> = {
   },
   'faculty-ai': {
     title: 'AI Schedule Assistant',
-    subtitle: 'Interactive conversational schedule assistant (UI prototype)',
+    subtitle: 'Gemini AI + CP-SAT powered schedule change assistant',
   },
 
   // Club Representative pages

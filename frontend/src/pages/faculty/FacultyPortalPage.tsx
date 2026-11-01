@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   Calendar,
   Clock,
@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import type { FacultyPageId, ScheduledSession, Faculty } from '../../types';
 import { useApi } from '../../hooks/useApi';
-import { fetchFaculty, fetchFullTimetableData, fetchRooms, requestAiReschedule, explainDecisionAi, proposeReschedule } from '../../services/api';
+import { fetchFaculty, fetchFullTimetableData, fetchRooms, requestAiReschedule, explainDecisionAi, proposeReschedule, fetchRescheduleProposals } from '../../services/api';
 import type { RescheduleProposal } from '../../types';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import ErrorAlert from '../../components/ui/ErrorAlert';
@@ -216,7 +216,7 @@ const INITIAL_CHAT_MESSAGES: ChatMessage[] = [
   {
     id: 'msg-1',
     sender: 'assistant',
-    text: 'Hello Professor! I am your CIT Scheduling Assistant. I can help inspect your scheduled teaching periods, check available laboratory slots, review daily teaching limits, and evaluate schedule adjustments. (Note: AI natural language backend integration is currently in prototype mode; responses below demonstrate conversational schedule assistance.)',
+    text: 'Hello Professor! I am your CIT Scheduling Assistant powered by Gemini AI and CP-SAT solver. I can help move or reschedule your classes, request remedial sessions, check available slots, and evaluate schedule adjustments. Try asking in English or Hinglish!',
     timestamp: '09:00 AM',
   },
 ];
@@ -443,6 +443,26 @@ export default function FacultyPortalPage({
   }, [mappedPersonalBlocks, mobileSelectedDay]);
 
     const [lastProposal, setLastProposal] = useState<RescheduleProposal | null>(null);
+  const [proposalsList, setProposalsList] = useState<RescheduleProposal[]>([]);
+  const [proposalsLoading, setProposalsLoading] = useState(false);
+
+  const loadProposals = useCallback(async () => {
+    try {
+      setProposalsLoading(true);
+      const data = await fetchRescheduleProposals();
+      if (Array.isArray(data)) {
+        setProposalsList(data);
+      }
+    } catch (e) {
+      console.warn('Could not fetch reschedule proposals:', e);
+    } finally {
+      setProposalsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadProposals();
+  }, [loadProposals]);
 
   const handleSendPrompt = async (promptText?: string) => {
     const textToSend = promptText || inputPrompt;
@@ -464,11 +484,22 @@ export default function FacultyPortalPage({
         lower.includes('extra') ||
         lower.includes('shift') ||
         lower.includes('swap') ||
-        lower.includes('leave');
+        lower.includes('leave') ||
+        lower.includes('class') ||
+        lower.includes('lecture') ||
+        lower.includes('session') ||
+        lower.includes('chahiye') ||
+        lower.includes('zaroorat') ||
+        lower.includes('hatao') ||
+        lower.includes('badlo') ||
+        lower.includes('laga do') ||
+        lower.includes('unavailable') ||
+        lower.includes('maintenance');
 
       if (isReschedule) {
         const proposal = await requestAiReschedule(textToSend);
         setLastProposal(proposal);
+        await loadProposals();
         let reply = `✨ **Gemini & CP-SAT Rescheduling Proposal**\n\n`;
         reply += `• **Proposal ID:** \`${proposal.proposal_id}\`\n`;
         reply += `• **Feasibility:** **${proposal.status.toUpperCase()}** (${proposal.solver_status})\n`;
@@ -533,22 +564,28 @@ export default function FacultyPortalPage({
     setSessionProposalNotice(null);
     try {
       const groups = personalSessions.find((s) => s.course_id === extraCourse)?.groups || [extraGroup];
+      const sid = `EXTRA-${extraCourse}-${Date.now().toString().slice(-4)}`;
       const proposal = await proposeReschedule({
         description: `Extra class for ${extraCourse} on ${extraDay} P${extraPeriod}: ${extraReason || 'Remedial session'}`,
         changes: [
           {
             type: 'add_session',
             session: {
-              session_id: `EXTRA-${extraCourse}-${Date.now().toString().slice(-4)}`,
+              id: sid,
+              session_id: sid,
               course_id: extraCourse,
               kind: extraType,
               groups: groups,
               faculty_id: selectedFaculty?.id ?? 'F01',
               day: extraDay,
               period: parseInt(extraPeriod, 10),
-              duration: 1,
+              duration: extraType === 'lab' ? 2 : 1,
               room_id: 'LH-101',
+              room_types: extraType === 'lab' ? ['lab_cs', 'lab'] : ['classroom', 'lecture_hall', 'auditorium'],
               size: 60,
+              needs_accessible: false,
+              basket_slot: null,
+              fixed_slot: { day: extraDay, period: parseInt(extraPeriod, 10) },
             },
           },
         ],
@@ -560,6 +597,7 @@ export default function FacultyPortalPage({
         proposalId: proposal.proposal_id,
         details: `${proposal.changes.length} change(s) evaluated by CP-SAT solver in ${proposal.solve_time_seconds.toFixed(2)}s. Status: ${proposal.solver_status}. Awaiting Admin Approval workflow.`,
       });
+      await loadProposals();
     } catch (err: unknown) {
       setSessionProposalNotice({
         type: 'warning',
@@ -589,6 +627,7 @@ export default function FacultyPortalPage({
           {
             type: 'add_session',
             session: {
+              id: changeSessionId,
               session_id: changeSessionId,
               course_id: sessionToMove?.course_id || 'CS301',
               kind: sessionToMove?.kind || 'lecture',
@@ -598,7 +637,11 @@ export default function FacultyPortalPage({
               period: parseInt(changeTargetPeriod, 10),
               duration: sessionToMove?.duration || 1,
               room_id: sessionToMove?.room_id || 'LH-101',
+              room_types: ['classroom', 'lecture_hall', 'auditorium'],
               size: sessionToMove?.size || 60,
+              needs_accessible: false,
+              basket_slot: null,
+              fixed_slot: { day: changeTargetDay, period: parseInt(changeTargetPeriod, 10) },
             },
           },
         ],
@@ -610,6 +653,7 @@ export default function FacultyPortalPage({
         proposalId: proposal.proposal_id,
         details: `${proposal.changes.length} change(s) computed by CP-SAT solver. Frozen: ${proposal.frozen_count}, Moves: ${proposal.moved_count}. Submitted to Admin Approval workflow.`,
       });
+      await loadProposals();
     } catch (err: unknown) {
       setSessionProposalNotice({
         type: 'warning',
@@ -1799,78 +1843,193 @@ export default function FacultyPortalPage({
             </div>
           </div>
 
-          {/* Bottom: Recent Session Requests Log */}
+          {/* Bottom: Real CP-SAT Proposals & Session Requests Log */}
           <div className="rounded-[26px] border border-[#E8E1D5] bg-[#FFFDF8] p-6 shadow-xs space-y-4">
-            <div className="flex items-center justify-between border-b border-[#E8E1D5] pb-3">
+            <div className="flex items-center justify-between border-b border-[#E8E1D5] pb-3 flex-wrap gap-2">
               <div>
                 <h3 className="text-base font-extrabold text-[#1E1E1E]">
-                  Recent Session Requests &amp; Status
+                  Submitted CP-SAT Reschedule Proposals & Requests
                 </h3>
                 <p className="text-xs text-[#75716B] font-medium mt-0.5">
-                  Track coordinator review decisions and solver feedback.
+                  Real proposals generated via Gemini AI & CP-SAT solver, tracked through the Admin Approval workflow.
                 </p>
               </div>
-              <span className="text-xs font-bold bg-[#FAF6ED] border border-[#E8E1D5] px-2.5 py-1 rounded-full text-[#1E1E1E]">
-                {INITIAL_FACULTY_REQUESTS.length} requests
-              </span>
-            </div>
-
-            <div className="space-y-3">
-              {INITIAL_FACULTY_REQUESTS.map((req) => (
-                <div
-                  key={req.id}
-                  className="p-4 rounded-[22px] border border-[#E8E1D5] bg-[#FAF6ED]/40 space-y-2 hover:bg-[#FAF6ED] transition-colors"
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => loadProposals()}
+                  disabled={proposalsLoading}
+                  className="rounded-full bg-[#FAF6ED] hover:bg-[#F3EDE0] border border-[#E8E1D5] px-3 py-1 text-xs font-bold text-[#1E1E1E] flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  title="Refresh proposals from backend"
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-mono text-xs font-bold text-[#1E1E1E] bg-white border border-[#E8E1D5] px-2 py-0.5 rounded-lg">
-                          {req.id}
-                        </span>
-                        <span className="font-extrabold text-xs text-[#1E1E1E]">
-                          {req.courseId} ΓÇö {req.courseTitle}
-                        </span>
-                        <span className="text-[10px] text-[#A39E95] font-semibold">
-                          ΓÇó {req.submittedAt}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#75716B] font-medium mt-0.5">
-                        Cohort: <strong>{req.cohort}</strong> ΓÇó Requested Window: {req.requestedSlot}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase shrink-0 ${
-                        req.status === 'approved'
-                          ? 'bg-[#EAF5ED] text-[#1E5C32] border border-[#B9D9C2]'
-                          : req.status === 'alternative_offered'
-                          ? 'bg-[#E8F0FC] text-[#1E4378] border border-[#B8CDEB]'
-                          : req.status === 'rejected'
-                          ? 'bg-[#FCF2F7] text-[#7A1F52] border border-[#E9A8CE]'
-                          : 'bg-[#FDF8E2] text-[#6B530E] border border-[#F4DA69]'
-                      }`}
-                    >
-                      {req.status === 'approved' && <CheckCircle2 size={11} />}
-                      {req.status === 'rejected' && <XCircle size={11} />}
-                      {req.status === 'pending' && <Clock size={11} />}
-                      {req.status === 'alternative_offered' && <ArrowRightLeft size={11} />}
-                      {req.status.replace('_', ' ')}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-[#75716B] font-medium">
-                    <strong className="text-[#1E1E1E]">Justification:</strong> {req.reason}
-                  </p>
-
-                  {req.decisionNote && (
-                    <div className="p-2 rounded-xl bg-white border border-[#E8E1D5] text-[11px] text-[#1E1E1E] font-medium flex items-start gap-1.5">
-                      <Info size={13} className="text-[#A39E95] shrink-0 mt-0.5" />
-                      <span><strong>Coordinator Feedback:</strong> {req.decisionNote}</span>
-                    </div>
-                  )}
-                </div>
-              ))}
+                  <RefreshCw size={12} className={proposalsLoading ? 'animate-spin text-[#E9A8CE]' : ''} />
+                  <span>Refresh</span>
+                </button>
+                <span className="text-xs font-bold bg-[#FAF6ED] border border-[#E8E1D5] px-2.5 py-1 rounded-full text-[#1E1E1E]">
+                  {proposalsList.length > 0 ? `${proposalsList.length} CP-SAT proposal(s)` : `${INITIAL_FACULTY_REQUESTS.length} demo requests`}
+                </span>
+              </div>
             </div>
+
+            {proposalsList.length > 0 ? (
+              <div className="space-y-4">
+                {proposalsList.map((prop) => (
+                  <div
+                    key={prop.proposal_id}
+                    className="p-4 rounded-[22px] border border-[#E8E1D5] bg-[#FAF6ED]/40 space-y-3 hover:bg-[#FAF6ED]/70 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2 flex-wrap">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs font-extrabold text-[#1E1E1E] bg-white border border-[#E8E1D5] px-2.5 py-0.5 rounded-lg shadow-2xs">
+                            {prop.proposal_id}
+                          </span>
+                          <span className="text-xs font-bold text-[#1E1E1E]">
+                            Solver Status: {prop.solver_status || 'OPTIMAL'}
+                          </span>
+                          <span className="text-[10px] text-[#A39E95] font-semibold">
+                            • Solved in {(prop.solve_time_seconds || 0).toFixed(2)}s • {prop.moved_count ?? 0} moved, {prop.frozen_count ?? 0} frozen
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#75716B] font-medium">
+                          Evaluated by OR-Tools CP-SAT with minimal timetable perturbation.
+                        </p>
+                      </div>
+
+                      <span
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-extrabold uppercase shrink-0 shadow-2xs ${
+                          prop.approved
+                            ? 'bg-[#EAF5ED] text-[#1E5C32] border border-[#B9D9C2]'
+                            : prop.status === 'feasible'
+                            ? 'bg-[#FDF8E2] text-[#6B530E] border border-[#F4DA69]'
+                            : 'bg-[#FCF2F7] text-[#7A1F52] border border-[#E9A8CE]'
+                        }`}
+                      >
+                        {prop.approved ? (
+                          <>
+                            <CheckCircle2 size={13} />
+                            <span>Approved by Admin</span>
+                          </>
+                        ) : prop.status === 'feasible' ? (
+                          <>
+                            <Clock size={13} />
+                            <span>Pending Admin Approval</span>
+                          </>
+                        ) : (
+                          <>
+                            <XCircle size={13} />
+                            <span>Infeasible</span>
+                          </>
+                        )}
+                      </span>
+                    </div>
+
+                    {/* Proposal Changes Diff */}
+                    {prop.changes && prop.changes.length > 0 && (
+                      <div className="bg-white rounded-xl border border-[#E8E1D5] overflow-hidden">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-[#FAF6ED] border-b border-[#E8E1D5] text-[#75716B] font-bold text-[10px] uppercase">
+                            <tr>
+                              <th className="px-3 py-1.5">Session ID</th>
+                              <th className="px-3 py-1.5">Before</th>
+                              <th className="px-3 py-1.5">Proposed Placement</th>
+                              <th className="px-3 py-1.5">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#EFE8DA]">
+                            {prop.changes.map((ch, idx) => (
+                              <tr key={idx} className="hover:bg-[#FAF6ED]/30">
+                                <td className="px-3 py-2 font-mono font-bold text-[#1E1E1E]">
+                                  {ch.session_id}
+                                </td>
+                                <td className="px-3 py-2 text-[#75716B]">
+                                  {ch.before ? (
+                                    <span className="font-semibold">{ch.before.day} P{ch.before.period} ({ch.before.room_id})</span>
+                                  ) : (
+                                    <span className="text-[#A39E95] italic">New Session</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  {ch.after ? (
+                                    <span className="font-bold text-[#1E5C32] bg-[#EAF5ED] border border-[#B9D9C2] px-2 py-0.5 rounded-md">
+                                      {ch.after.day} Period {ch.after.period} • {ch.after.room_id}
+                                    </span>
+                                  ) : (
+                                    <span className="text-rose-600 font-bold italic">Unscheduled</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-[#E8F0FC] text-[#1E4378] border border-[#B8CDEB]">
+                                    {ch.kind}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {INITIAL_FACULTY_REQUESTS.map((req) => (
+                  <div
+                    key={req.id}
+                    className="p-4 rounded-[22px] border border-[#E8E1D5] bg-[#FAF6ED]/40 space-y-2 hover:bg-[#FAF6ED] transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono text-xs font-bold text-[#1E1E1E] bg-white border border-[#E8E1D5] px-2 py-0.5 rounded-lg">
+                            {req.id}
+                          </span>
+                          <span className="font-extrabold text-xs text-[#1E1E1E]">
+                            {req.courseId} — {req.courseTitle}
+                          </span>
+                          <span className="text-[10px] text-[#A39E95] font-semibold">
+                            • {req.submittedAt}
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#75716B] font-medium mt-0.5">
+                          Cohort: <strong>{req.cohort}</strong> • Requested Window: {req.requestedSlot}
+                        </p>
+                      </div>
+
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase shrink-0 ${
+                          req.status === 'approved'
+                            ? 'bg-[#EAF5ED] text-[#1E5C32] border border-[#B9D9C2]'
+                            : req.status === 'alternative_offered'
+                            ? 'bg-[#E8F0FC] text-[#1E4378] border border-[#B8CDEB]'
+                            : req.status === 'rejected'
+                            ? 'bg-[#FCF2F7] text-[#7A1F52] border border-[#E9A8CE]'
+                            : 'bg-[#FDF8E2] text-[#6B530E] border border-[#F4DA69]'
+                        }`}
+                      >
+                        {req.status === 'approved' && <CheckCircle2 size={11} />}
+                        {req.status === 'rejected' && <XCircle size={11} />}
+                        {req.status === 'pending' && <Clock size={11} />}
+                        {req.status === 'alternative_offered' && <ArrowRightLeft size={11} />}
+                        {req.status.replace('_', ' ')}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-[#75716B] font-medium">
+                      <strong className="text-[#1E1E1E]">Justification:</strong> {req.reason}
+                    </p>
+
+                    {req.decisionNote && (
+                      <div className="p-2 rounded-xl bg-white border border-[#E8E1D5] text-[11px] text-[#1E1E1E] font-medium flex items-start gap-1.5">
+                        <Info size={13} className="text-[#A39E95] shrink-0 mt-0.5" />
+                        <span><strong>Coordinator Feedback:</strong> {req.decisionNote}</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

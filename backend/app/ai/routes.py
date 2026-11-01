@@ -4,10 +4,12 @@ FastAPI routes for Gemini AI assistant and natural language processing.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from app.ai.service import (
     explain_decision_ai,
@@ -15,6 +17,10 @@ from app.ai.service import (
     process_ai_reschedule_request,
 )
 from app.core.auth import get_verified_user
+from app.core.database import get_db
+from app.core.persistence import persist_reschedule_proposal
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
 
@@ -53,6 +59,7 @@ def parse_booking_endpoint(
 def ai_reschedule_endpoint(
     body: ReschedulePromptInput,
     user: dict = Depends(get_verified_user),
+    db: Session | None = Depends(get_db),
 ):
     """Convert natural language schedule change into a CP-SAT rescheduling proposal.
 
@@ -63,6 +70,13 @@ def ai_reschedule_endpoint(
         raise HTTPException(status_code=400, detail="Schedule change prompt cannot be empty")
 
     proposal = process_ai_reschedule_request(body.prompt, user)
+
+    if db is not None:
+        try:
+            persist_reschedule_proposal(db, user, proposal)
+        except Exception as exc:
+            logger.warning("Could not persist AI reschedule proposal: %s", exc)
+
     return proposal
 
 

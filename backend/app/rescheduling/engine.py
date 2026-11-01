@@ -40,6 +40,11 @@ def get_proposal(proposal_id: str) -> dict | None:
     return _proposals.get(proposal_id)
 
 
+def list_proposals() -> list[dict]:
+    """Return all stored proposals, newest first."""
+    return list(reversed(list(_proposals.values())))
+
+
 # ── Helpers ─────────────────────────────────────────────────────
 
 
@@ -57,23 +62,82 @@ def _apply_disruptions(data: dict[str, Any], changes: list[dict]) -> tuple[
     new_sessions: list[dict] = []
 
     for change in changes:
-        ctype = change["type"]
+        ctype = change.get("type", "")
 
         if ctype == "faculty_unavailable":
-            fid = change["faculty_id"]
-            for day in change["days"]:
-                for pid in change["periods"]:
+            fid = change.get("faculty_id")
+            days = [d[:3].upper() if len(d) >= 3 else d for d in change.get("days", [])]
+            for day in days:
+                for pid in change.get("periods", []):
                     data["faculty_unavail"][(fid, day, pid)] = True
 
         elif ctype == "room_unavailable":
-            rid = change["room_id"]
-            for day in change["days"]:
-                for pid in change["periods"]:
+            rid = change.get("room_id")
+            days = [d[:3].upper() if len(d) >= 3 else d for d in change.get("days", [])]
+            for day in days:
+                for pid in change.get("periods", []):
                     data["room_unavail"][(rid, day, pid)] = True
 
         elif ctype == "add_session":
-            sess = change["session"]
+            sess = dict(change.get("session", {}))
+            sid = sess.get("id") or sess.get("session_id")
+            if not sid:
+                sid = f"EXTRA-{len(new_sessions) + 1}"
+            sess["id"] = sid
+            sess["session_id"] = sid
+
+            req_day = sess.get("day")
+            if req_day and len(req_day) >= 3:
+                sess["day"] = req_day[:3].upper()
+
+            # If this session already exists in the dataset, it is a move/shift!
+            if sid in data.get("session_by_id", {}):
+                affected.add(sid)
+                orig_sess = data["session_by_id"][sid]
+                if sess.get("day") and sess.get("period"):
+                    orig_sess["fixed_slot"] = {"day": sess["day"], "period": sess["period"]}
+                continue
+
+            # Fill missing attributes with safe defaults
+            if "course_id" not in sess:
+                sess["course_id"] = f"EXTRA-{sid}"
+            if "kind" not in sess:
+                sess["kind"] = "lecture"
+            if "groups" not in sess:
+                sess["groups"] = ["CSE-1"]
+            if "duration" not in sess:
+                sess["duration"] = 2 if sess["kind"] == "lab" else 1
+            if "size" not in sess:
+                sess["size"] = 60
+            if "room_types" not in sess or not sess["room_types"]:
+                if sess["kind"] == "lab":
+                    sess["room_types"] = ["lab_cs", "lab"]
+                else:
+                    sess["room_types"] = ["classroom", "lecture_hall", "auditorium"]
+            if "needs_accessible" not in sess:
+                sess["needs_accessible"] = False
+            if "basket_slot" not in sess:
+                sess["basket_slot"] = None
+            if "fixed_slot" not in sess:
+                if sess.get("day") and sess.get("period"):
+                    sess["fixed_slot"] = {"day": sess["day"], "period": sess["period"]}
+                else:
+                    sess["fixed_slot"] = None
+
             new_sessions.append(sess)
+
+        elif ctype in ("move_session", "session_unavailable"):
+            sid = change.get("session_id") or change.get("id")
+            if sid:
+                affected.add(sid)
+                t_day = change.get("target_day")
+                t_per = change.get("target_period")
+                if sid in data.get("session_by_id", {}) and t_day and t_per:
+                    norm_day = t_day[:3].upper() if len(t_day) >= 3 else t_day
+                    data["session_by_id"][sid]["fixed_slot"] = {
+                        "day": norm_day,
+                        "period": t_per,
+                    }
 
     return data, affected, new_sessions
 
@@ -156,10 +220,14 @@ def _identify_affected(
 def _compatible_rooms(session: dict, data: dict[str, Any]) -> list[str]:
     """Room IDs compatible with a session (type, capacity, accessibility)."""
     compat = []
+    r_types = session.get("room_types") or (
+        ["lab_cs", "lab"] if session.get("kind") == "lab" else ["classroom", "lecture_hall", "auditorium"]
+    )
+    sz = session.get("size", 60)
     for r in data["rooms"]:
-        if r["type"] not in session["room_types"]:
+        if r["type"] not in r_types:
             continue
-        if r["capacity"] < session["size"]:
+        if r["capacity"] < sz:
             continue
         if session.get("needs_accessible", False) and not r.get("accessible", False):
             continue
@@ -184,7 +252,10 @@ def _valid_start_slots(session: dict, data: dict[str, Any]) -> list[int]:
 
     fixed = session.get("fixed_slot")
     if fixed:
-        idx = ts_idx.get((fixed["day"], fixed["period"]))
+        f_day = fixed.get("day", "")
+        if len(f_day) >= 3:
+            f_day = f_day[:3].upper()
+        idx = ts_idx.get((f_day, fixed.get("period")))
         return [idx] if idx is not None else []
 
     valid = []

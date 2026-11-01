@@ -33,6 +33,60 @@ from app.core.database import get_db
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════
+# Demo-Mode Token Support (hackathon judging)
+# ═══════════════════════════════════════════════════════
+
+_DEMO_USERS: dict[str, dict] = {
+    "demo-token-admin": {
+        "user_id": "00000000-0000-0000-0000-000000000001",
+        "email": "admin@test.cit.edu",
+        "full_name": "System Administrator",
+        "role": "admin",
+        "department": None,
+        "faculty_id": None,
+    },
+    "demo-token-department_coordinator": {
+        "user_id": "00000000-0000-0000-0000-000000000002",
+        "email": "department_coordinator@test.cit.edu",
+        "full_name": "Dr. Ananya Mishra (CSE Coordinator)",
+        "role": "department_coordinator",
+        "department": "CSE",
+        "faculty_id": None,
+    },
+    "demo-token-faculty": {
+        "user_id": "00000000-0000-0000-0000-000000000003",
+        "email": "faculty@test.cit.edu",
+        "full_name": "Dr. Ananya Mishra",
+        "role": "faculty",
+        "department": "CSE",
+        "faculty_id": "F01",
+    },
+    "demo-token-club": {
+        "user_id": "00000000-0000-0000-0000-000000000004",
+        "email": "club@test.cit.edu",
+        "full_name": "Coding Club & IEEE Lead",
+        "role": "club",
+        "department": None,
+        "faculty_id": None,
+    },
+}
+
+
+def _resolve_demo_token(token: str) -> dict | None:
+    """If DEMO_MODE is on and the token matches a demo fixture, return the user dict."""
+    if not settings.demo_mode:
+        return None
+    # Exact match first
+    if token in _DEMO_USERS:
+        return dict(_DEMO_USERS[token])
+    # Also accept tokens like "token-admin" from the generic login fallback
+    for suffix, user in _DEMO_USERS.items():
+        role = suffix.removeprefix("demo-token-")
+        if token == f"token-{role}":
+            return dict(user)
+    return None
+
+# ═══════════════════════════════════════════════════════
 # JWKS Cache
 # ═══════════════════════════════════════════════════════
 
@@ -226,6 +280,11 @@ def get_current_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Missing access token")
 
+    # Demo-mode shortcut: recognise fixture tokens without JWT verification
+    demo_user = _resolve_demo_token(token)
+    if demo_user is not None:
+        return demo_user
+
     try:
         payload = _decode_token(token)
     except (JOSEError, RuntimeError) as exc:
@@ -250,6 +309,9 @@ def get_verified_user(
     ``department``, and ``faculty_id``.  Client-supplied values for
     these fields are **never** trusted.
 
+    In demo mode, the profile fields are already populated by
+    ``_resolve_demo_token`` and no DB lookup is needed.
+
     Returns
     -------
     dict
@@ -261,6 +323,10 @@ def get_verified_user(
     HTTPException (403)
         If no profile row exists for this user.
     """
+    # Demo-mode users already carry all profile fields
+    if "role" in user and "full_name" in user:
+        return user
+
     row = db.execute(
         text(
             "SELECT full_name, role, department, faculty_id "
