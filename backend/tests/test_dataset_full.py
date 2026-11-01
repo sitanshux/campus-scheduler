@@ -3,6 +3,9 @@ Tests for the GET /api/dataset/full endpoint.
 
 Verifies that all seven collections are returned with correct record counts
 and that the endpoint is read-only (uses the cached dataset loader).
+
+The endpoint requires admin or department_coordinator role — tests use
+the ``override_auth`` fixture from conftest.py.
 """
 
 from __future__ import annotations
@@ -20,10 +23,9 @@ from app.main import dataset_full, app
 class TestDatasetFullEndpoint:
     """Verify the /api/dataset/full endpoint."""
 
-    @pytest.fixture(scope="class")
-    @classmethod
-    def result(cls):
-        return dataset_full()
+    @pytest.fixture()
+    def result(self, override_auth):
+        return dataset_full(user=override_auth)
 
     def test_returns_dict(self, result):
         assert isinstance(result, dict)

@@ -3,6 +3,9 @@ API integration tests.
 
 Tests that the FastAPI endpoints work correctly by directly importing
 and calling the endpoint functions (avoiding TestClient compatibility issues).
+
+Routes that require auth use the ``override_auth`` fixture from conftest.py,
+which injects a mock admin user into the dependency overrides.
 """
 
 from __future__ import annotations
@@ -47,8 +50,8 @@ class TestExistingEndpoints:
 class TestScheduleEndpoint:
     """Test the schedule generation endpoint function."""
 
-    def test_generate_returns_result(self):
-        result = generate_schedule(time_limit_seconds=120)
+    def test_generate_returns_result(self, override_auth):
+        result = generate_schedule(time_limit_seconds=120, user=override_auth)
         assert "success" in result
         assert "status" in result
         assert "scheduled" in result
@@ -56,8 +59,8 @@ class TestScheduleEndpoint:
         assert "diagnostics" in result
         assert "solve_time_seconds" in result
 
-    def test_generate_schedules_all(self):
-        result = generate_schedule(time_limit_seconds=120)
+    def test_generate_schedules_all(self, override_auth):
+        result = generate_schedule(time_limit_seconds=120, user=override_auth)
         assert result["status"] in ("OPTIMAL", "FEASIBLE")
         assert result["diagnostics"]["scheduled_count"] == 189
         assert result["success"] is True

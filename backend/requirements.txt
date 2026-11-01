@@ -6,3 +6,7 @@ pydantic-settings
 python-dotenv
 httpx
 pytest
+sqlalchemy[postgresql-psycopg]
+psycopg[binary]
+python-jose[cryptography]
+alembic
